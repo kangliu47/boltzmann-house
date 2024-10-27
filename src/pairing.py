@@ -5,20 +5,14 @@ import pandas as pd
 from typing import List, Tuple, Dict, Optional
 
 
-def compute_time_decay_weights(
-    num_rounds: int, lambda_decay: float = 0.1
-) -> np.ndarray:
-    """
-    Computes time decay weights using an exponential decay function.
+def get_round_name(round_idx: int) -> str:
+    return f"round_{round_idx}"
 
-    Parameters:
-    - num_rounds (int): Number of past rounds to consider.
-    - lambda_decay (float): Decay rate for the exponential function.
 
-    Returns:
-    - np.ndarray: Array of decay weights.
-    """
-    return np.exp(-lambda_decay * np.arange(num_rounds))
+def compute_time_decay_weights(num_rounds: int, decay_rate: float = 0.1) -> pd.Series:
+    weight_values = np.exp(-decay_rate * np.arange(num_rounds))
+    time_index = [get_round_name(round_idx) for round_idx in np.arange(num_rounds)]
+    return pd.Series(weight_values, index=time_index)
 
 
 def create_empty_history(candidate_ids: list) -> pd.DataFrame:
@@ -39,19 +33,13 @@ def remove_candidate(candidate_ids: list, candidate_id: int) -> list:
     return candidate_ids
 
 
-# for each round the pairing configuration is List[Tuple[int, int]]
-# for the left out candidate, it will be (left_out_candidate_idx, -1)
-# pairing_history is a dataframe with index=candidate_id,
-# pairing_history.columns is growing with latest round result
-# after round x, pairing_history.loc[1, "round_x"] will store the id of candidate that was paired with candidate 1 in the latest round
-
-
 def update_history(
     current_round: int,
     pairings: List[Tuple[int, int]],
     previous_history: pd.DataFrame,
 ) -> pd.DataFrame:
-    round_column = f"round_{current_round}"
+    # NOTE: We assumes that the left_out candidate will be pair with -1
+    round_column = get_round_name(current_round)
     new_history = previous_history.copy()
     new_history[round_column] = 0
 
@@ -62,51 +50,63 @@ def update_history(
     return new_history
 
 
-def calculate_pairing_energy(
-    pairing_history: pd.DataFrame, decay_weights: np.ndarray
-) -> pd.DataFrame:
-    """
-    Calculates the pairing energies based on the pairing history.
+def calculate_total_energy(
+    current_round: int,
+    pairings: List[Tuple[int, int]],
+    previous_history: pd.DataFrame,
+    energy_each_pair: float,
+    energy_left_out: float,
+) -> float:
+    total_energy = 0
+    number_of_past_rounds = current_round - 1
+    assert previous_history.shape[1] == number_of_past_rounds
+    pair_weights_decay = compute_time_decay_weights(num_rounds=number_of_past_rounds)
+    for new_pair in pairings:
+        if any(new_pair) == -1:
+            energy_this_pair = 0 * energy_left_out
+        else:
+            historical_pairing = find_historical_pairing(new_pair, previous_history)
+            energy_this_pair = energy_each_pair * calculate_pairing_energy(
+                historical_pairing, pair_weights_decay
+            )
+        total_energy += energy_this_pair
+    return total_energy
 
-    Parameters:
-    - pairing_history (pd.DataFrame): DataFrame containing pairing history.
-    - decay_weights (np.ndarray): Array of decay weights.
 
-    Returns:
-    - pd.DataFrame: DataFrame of pairing energies between candidates.
-    """
-    pass
-
-
-def calculate_left_out_energy(
-    left_out_history: pd.DataFrame, decay_weights: np.ndarray
+def find_historical_pairing(
+    new_pair: Tuple[int, int], pairing_history: pd.DataFrame
 ) -> pd.Series:
-    """
-    Calculates the left-out energies based on the left-out history.
+    # return the series with index=round_{idx} and each cell = 1 or 0 depending on if the new_pair previously are in history
+    candidate_1, candidate_2 = new_pair
+    if candidate_1 == -1 or candidate_2 == -1:
+        raise ValueError("Invalid Pairing!")
+    else:
+        history_for_1 = pairing_history.loc[candidate_1]
+        paired_with_2 = (history_for_1 == candidate_2).astype(int)
+        return paired_with_2
 
-    Parameters:
-    - left_out_history (pd.DataFrame): DataFrame containing left-out history.
-    - decay_weights (np.ndarray): Array of decay weights.
 
-    Returns:
-    - pd.Series: Series of left-out energies for each candidate.
-    """
+def calculate_pairing_energy(
+    historical_pairing: pd.Series,
+    decay_weights: pd.Series,
+) -> float:
+    assert historical_pairing.index.equals(decay_weights.index)
+    overlap_weights = historical_pairing * decay_weights
+    return overlap_weights.sum()
+
+
+# * --------- coding ends here -----2024-10-26----
+def calculate_left_out_energy(
+    pairings: List[Tuple[int, int]],
+    pairing_history: pd.DataFrame,
+    decay_weights: np.ndarray,
+) -> pd.Series:
     pass
 
 
-def generate_possible_configurations(
-    candidates: List[int], num_samples: int = 1000
-) -> List[Dict[str, List]]:
-    """
-    Generates sampled valid pairing configurations.
-
-    Parameters:
-    - candidates (List[int]): List of candidate IDs.
-    - num_samples (int): Number of configurations to sample.
-
-    Returns:
-    - List[Dict[str, List]]: List of sampled configurations, each containing pairings and left-out candidates.
-    """
+def generate_possible_pairing_configurations(
+    candidates: List[int],
+):
     pass
 
 
@@ -116,34 +116,12 @@ def compute_configuration_probabilities(
     left_out_energy: pd.Series,
     beta: float = 1.0,
 ) -> List[float]:
-    """
-    Computes the Boltzmann probabilities for each configuration.
-
-    Parameters:
-    - configurations (List[Dict[str, List]]): List of possible configurations.
-    - pairing_energy (pd.DataFrame): DataFrame of pairing energies.
-    - left_out_energy (pd.Series): Series of left-out energies.
-    - beta (float): Inverse temperature parameter controlling randomness.
-
-    Returns:
-    - List[float]: List of probabilities corresponding to each configuration.
-    """
     pass
 
 
 def select_configuration(
     configurations: List[Dict[str, List]], probabilities: List[float]
 ) -> Dict[str, List]:
-    """
-    Selects a configuration based on computed probabilities.
-
-    Parameters:
-    - configurations (List[Dict[str, List]]): List of possible configurations.
-    - probabilities (List[float]): Corresponding probabilities for each configuration.
-
-    Returns:
-    - Dict[str, List]: The chosen configuration containing pairings and left-out candidates.
-    """
     pass
 
 
@@ -153,42 +131,12 @@ def run_round(
     pairing_history: pd.DataFrame,
     left_out_history: pd.DataFrame,
     beta: float = 1.0,
-    lambda_decay: float = 0.1,
+    decay_rate: float = 0.1,
     half_life: Optional[float] = None,
     num_samples: int = 1000,
 ) -> Tuple[Dict[str, List], pd.DataFrame, pd.DataFrame]:
-    """
-    Executes a single pairing round.
-
-    Parameters:
-    - current_round (int): Current round number.
-    - candidates (List[int]): List of candidate IDs.
-    - pairing_history (pd.DataFrame): DataFrame containing pairing history.
-    - left_out_history (pd.DataFrame): DataFrame containing left-out history.
-    - beta (float): Inverse temperature parameter.
-    - lambda_decay (float): Decay rate for the time decay function.
-    - half_life (Optional[float]): Half-life for decay; if provided, lambda_decay is calculated from it.
-    - num_samples (int): Number of configurations to sample.
-
-    Returns:
-    - Tuple[Dict[str, List], pd.DataFrame, pd.DataFrame]:
-        - Selected configuration for the current round.
-        - Updated pairing history DataFrame.
-        - Updated left-out history DataFrame.
-    """
     pass
 
 
 def initialize_histories(candidates: List[int]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Initializes empty pairing and left-out histories.
-
-    Parameters:
-    - candidates (List[int]): List of candidate IDs.
-
-    Returns:
-    - Tuple[pd.DataFrame, pd.DataFrame]:
-        - Empty pairing history DataFrame.
-        - Empty left-out history DataFrame.
-    """
     pass
